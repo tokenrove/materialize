@@ -265,7 +265,7 @@ impl JoinClosure {
         before.permute(permutation, thinned_arity_with_key);
 
         // `before` should not be modified after this point.
-        before.optimize();
+        before.optimize(); // XXX FIXME
 
         // Cons up an instance of the closure with the closed-over state.
         Self {
@@ -388,7 +388,7 @@ impl JoinBuildState {
         }
         let column_map_len = column_map.len();
         mfp.permute(column_map, column_map_len);
-        mfp.optimize();
+        mfp.optimize(); // XXX FIXME
 
         JoinClosure {
             ready_equivalences: equivalences,

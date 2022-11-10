@@ -99,10 +99,10 @@ impl FoldConstants {
 
                 // Guard against evaluating an expression that may contain
                 // unmaterializable functions.
-                if group_key.iter().any(|e| e.contains_unmaterializable())
+                if group_key.iter().any(|e| e.contains_unmaterializable().unwrap_or(true))
                     || aggregates
                         .iter()
-                        .any(|a| a.expr.contains_unmaterializable())
+                        .any(|a| a.expr.contains_unmaterializable().unwrap_or(true))
                 {
                     return Ok(());
                 }
@@ -172,7 +172,7 @@ impl FoldConstants {
 
                 // Guard against evaluating expression that may contain
                 // unmaterializable functions.
-                if scalars.iter().any(|e| e.contains_unmaterializable()) {
+                if scalars.iter().any(|e| e.contains_unmaterializable().unwrap_or(true)) {
                     return Ok(());
                 }
 
@@ -206,7 +206,7 @@ impl FoldConstants {
                 }
 
                 // Guard against evaluating expression that may contain unmaterializable functions.
-                if exprs.iter().any(|e| e.contains_unmaterializable()) {
+                if exprs.iter().any(|e| e.contains_unmaterializable().unwrap_or(true)) {
                     return Ok(());
                 }
 
@@ -241,7 +241,7 @@ impl FoldConstants {
 
                 // Guard against evaluating expression that may contain
                 // unmaterializable function calls.
-                if predicates.iter().any(|e| e.contains_unmaterializable()) {
+                if predicates.iter().any(|e| e.contains_unmaterializable().unwrap_or(true)) {
                     return Ok(());
                 }
 
@@ -307,7 +307,7 @@ impl FoldConstants {
                     // Guard against evaluating expression that may contain unmaterializable functions.
                     if equivalences
                         .iter()
-                        .any(|equiv| equiv.iter().any(|e| e.contains_unmaterializable()))
+                        .any(|equiv| equiv.iter().any(|e| e.contains_unmaterializable().unwrap_or(true)))
                     {
                         return Ok(());
                     }

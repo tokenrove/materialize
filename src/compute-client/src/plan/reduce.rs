@@ -778,9 +778,9 @@ impl KeyValPlan {
             val_mfp.permute(input_permutation, new_arity);
         }
 
-        key_mfp.optimize();
+        key_mfp.optimize(); // XXX FIXME
         let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
-        val_mfp.optimize();
+        val_mfp.optimize(); // XXX FIXME
         let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
 
         Self { key_plan, val_plan }

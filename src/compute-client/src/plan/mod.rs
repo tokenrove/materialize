@@ -1124,7 +1124,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             input_mapper,
                             &mut mfp,
                             &input_keys,
-                        );
+                        ).map_err(|_| ())?; // XXX WIP
                         (JoinPlan::Linear(ljp), missing)
                     }
                     Differential((start, _start_arr), order) => {
@@ -1137,7 +1137,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             input_mapper,
                             &mut mfp,
                             &input_keys,
-                        );
+                        ).map_err(|_| ())?; // XXX WIP
                         (JoinPlan::Linear(ljp), missing)
                     }
                     DeltaQuery(orders) => {
@@ -1147,7 +1147,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             input_mapper,
                             &mut mfp,
                             &input_keys,
-                        );
+                        ).map_err(|_| ())?; // XXX WIP
                         (JoinPlan::Delta(djp), missing)
                     }
                     // Other plans are errors, and should be reported as such.
@@ -1575,7 +1575,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } else {
                     common
                 };
-                mfp.optimize();
+                mfp.optimize().map_err(|_| ())?; // XXX WIP
                 source.arguments.operators = Some(mfp);
             }
         }

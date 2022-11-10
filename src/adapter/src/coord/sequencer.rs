@@ -2066,7 +2066,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let conn_id = session.conn_id();
         // Queries are independent of the logical timestamp iff there are no referenced
         // sources or indexes and there is no reference to `mz_now()`.
-        let timestamp_independent = source_ids.is_empty() && !source.contains_temporal();
+        let timestamp_independent = source_ids.is_empty() && !source.contains_temporal()?;
         // For transactions that do not use AS OF, get the
         // timestamp of the in-progress transaction or create one. If this is an AS OF
         // query, we don't care about any possible transaction timestamp. If this is a
@@ -2774,14 +2774,21 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 };
 
-                if selection.contains_temporal() {
-                    tx.send(
-                        Err(AdapterError::Unsupported(
-                            "calls to mz_now in write statements",
-                        )),
-                        session,
-                    );
-                    return;
+                match selection.contains_temporal() {
+                    Ok(true) => {
+                        tx.send(
+                            Err(AdapterError::Unsupported(
+                                "calls to mz_now in write statements",
+                            )),
+                            session,
+                        );
+                        return;
+                    },
+                    Err(e) => { // XXX WIP
+                        tx.send(Err(e.into()), session);
+                        return;
+                    },
+                    _ => (),
                 }
 
                 let finishing = RowSetFinishing {

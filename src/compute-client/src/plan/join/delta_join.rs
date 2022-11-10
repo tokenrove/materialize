@@ -27,6 +27,7 @@ use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
 use mz_expr::MirScalarExpr;
 use mz_expr::{join_permutations, JoinInputCharacteristics};
+use mz_ore::stack::RecursionLimitError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -221,7 +222,7 @@ impl DeltaJoinPlan {
         input_mapper: JoinInputMapper,
         map_filter_project: &mut MapFilterProject,
         available: &[AvailableCollections],
-    ) -> (Self, Vec<AvailableCollections>) {
+    ) -> Result<(Self, Vec<AvailableCollections>), RecursionLimitError> {
         let mut requested: Vec<AvailableCollections> =
             vec![Default::default(); input_mapper.total_inputs()];
         let number_of_inputs = input_mapper.total_inputs();
@@ -248,7 +249,7 @@ impl DeltaJoinPlan {
             path_plans: Vec::with_capacity(number_of_inputs),
         };
 
-        let temporal_mfp = map_filter_project.extract_temporal();
+        let temporal_mfp = map_filter_project.extract_temporal()?;
 
         // Each source relation will contribute a path to the join plan.
         for source_relation in 0..number_of_inputs {
@@ -381,6 +382,6 @@ impl DeltaJoinPlan {
         // assign the remaining temporal predicates to it, for the caller's use.
         *map_filter_project = temporal_mfp;
 
-        (join_plan, requested)
+        Ok((join_plan, requested))
     }
 }

@@ -19,6 +19,7 @@ use mz_expr::{JoinInputCharacteristics, MapFilterProject};
 use mz_expr::join_permutations;
 use mz_expr::permutation_for_arrangement;
 use mz_expr::MirScalarExpr;
+use mz_ore::stack::RecursionLimitError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::result::Probability;
@@ -172,10 +173,10 @@ impl LinearJoinPlan {
         input_mapper: mz_expr::JoinInputMapper,
         mfp_above: &mut MapFilterProject,
         available: &[AvailableCollections],
-    ) -> (Self, Vec<AvailableCollections>) {
+    ) -> Result<(Self, Vec<AvailableCollections>), RecursionLimitError> {
         let mut requested: Vec<AvailableCollections> =
             vec![Default::default(); input_mapper.total_inputs()];
-        let temporal_mfp = mfp_above.extract_temporal();
+        let temporal_mfp = mfp_above.extract_temporal()?;
         // Construct initial join build state.
         // This state will evolves as we build the join dataflow.
         let mut join_build_state = JoinBuildState::new(
@@ -314,6 +315,6 @@ impl LinearJoinPlan {
             stage_plans,
             final_closure,
         };
-        (plan, requested)
+        Ok((plan, requested))
     }
 }

@@ -1309,10 +1309,13 @@ impl MirRelationExpr {
     }
 
     /// True iff the expression contains a `NullaryFunc::MzLogicalTimestamp`.
-    pub fn contains_temporal(&mut self) -> bool {
+    pub fn contains_temporal(&mut self) -> Result<bool, RecursionLimitError> {
         let mut contains = false;
-        self.visit_scalars_mut(&mut |e| contains = contains || e.contains_temporal());
-        contains
+        self.try_visit_scalars_mut(&mut |e| {
+            contains = contains || e.contains_temporal()?;
+            Ok(())
+        })?;
+        Ok(contains)
     }
 
     /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
@@ -1386,20 +1389,6 @@ impl MirRelationExpr {
         E: From<RecursionLimitError>,
     {
         self.try_visit_mut_post(&mut |expr| expr.try_visit_scalars_mut1(f))
-    }
-
-    /// Infallible mutable visitor for the [`MirScalarExpr`]s in the [`MirRelationExpr`] subtree rooted at at `self`.
-    ///
-    /// Note that this does not recurse into [`MirRelationExpr`] subtrees within [`MirScalarExpr`] nodes.
-    pub fn visit_scalars_mut<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut MirScalarExpr),
-    {
-        self.try_visit_scalars_mut(&mut |s| {
-            f(s);
-            Ok::<_, RecursionLimitError>(())
-        })
-        .expect("Unexpected error in `visit_scalars_mut` call");
     }
 
     /// Clears the contents of `self` even if it's so deep that simply dropping it would cause a

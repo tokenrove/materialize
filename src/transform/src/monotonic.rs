@@ -57,7 +57,8 @@ impl MonotonicFlag {
                     // can result in the future removal of records.
                     // TODO: this could be improved to only restrict if upper bounds
                     // are present, as temporal lower bounds only delay introduction.
-                    is_monotonic && !predicates.iter().any(|p| p.contains_temporal())
+                    let any_temporal = itertools::process_results(predicates.iter().map(|p| p.contains_temporal()), |mut iter| iter.any(|p| p))?; // XXX WIP
+                    is_monotonic && !any_temporal
                 }
                 MirRelationExpr::Map { input, .. } => self.apply(input, mon_ids, locals)?,
                 MirRelationExpr::TopK {

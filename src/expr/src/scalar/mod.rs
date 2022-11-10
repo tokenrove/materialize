@@ -1766,27 +1766,29 @@ impl MirScalarExpr {
 
     /// True iff the expression contains
     /// `UnmaterializableFunc::MzNow`.
-    pub fn contains_temporal(&self) -> bool {
+    pub fn contains_temporal(&self) -> Result<bool, RecursionLimitError> {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_post(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
                 contains = true;
             }
-        });
-        contains
+        })?;
+        Ok(contains)
     }
 
     /// True iff the expression contains an `UnmaterializableFunc`.
-    pub fn contains_unmaterializable(&self) -> bool {
+
+    // WIP NOTE: It's tempting to simply return true if we hit the
+    // recursion limit, since this generally just gets called as a
+    // guard, but this behavior might be misleading in the future.
+    pub fn contains_unmaterializable(&self) -> Result<bool, RecursionLimitError> {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_post(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(_) = e {
                 contains = true;
             }
-        });
-        contains
+        })?;
+        Ok(contains)
     }
 
     pub fn size(&self) -> Result<usize, RecursionLimitError> {

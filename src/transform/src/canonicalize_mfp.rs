@@ -76,7 +76,7 @@ impl CanonicalizeMfp {
         let mut mfp = mz_expr::MapFilterProject::extract_non_errors_from_expr_mut(relation);
         relation.try_visit_mut_children(|e| self.action(e, indexes))?;
         // perform CSE
-        mfp.optimize();
+        mfp.optimize()?;
 
         // See if there are predicates of the form <expr>=literal that can be
         // sped up using an index.
@@ -189,7 +189,7 @@ impl CanonicalizeMfp {
                         .map(map)
                         .filter(filter)
                         .project(project);
-                    mfp.optimize()
+                    mfp.optimize()?
                 }
             }
         }

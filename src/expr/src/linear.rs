@@ -12,6 +12,7 @@ use std::fmt::Display;
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use mz_ore::stack::RecursionLimitError;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row};
 
@@ -448,22 +449,25 @@ impl MapFilterProject {
     /// unused.
     ///
     /// This separation is valuable when the execution cannot be fused into one operator.
-    pub fn extract_temporal(&mut self) -> Self {
+    pub fn extract_temporal(&mut self) -> Result<Self, RecursionLimitError> {
         // Optimize the expression, as it is only post-optimization that we can be certain
         // that temporal expressions are restricted to filters. We could relax this in the
         // future to be only `inline_expressions` and `remove_undemanded`, but optimization
         // seems to be the best fit at the moment.
-        self.optimize();
+        self.optimize()?;
 
         // Assert that we no longer have temporal expressions to evaluate. This should only
         // occur if the optimization above results with temporal expressions yielded in the
         // output, which is out of spec for how the type is meant to be used.
-        assert!(!self.expressions.iter().any(|e| e.contains_temporal()));
+        assert!(!self
+            .expressions
+            .iter()
+            .any(|e| e.contains_temporal().unwrap_or(false)));
 
         // Extract temporal predicates from `self.predicates`.
         let mut temporal_predicates = Vec::new();
         self.predicates.retain(|(_position, predicate)| {
-            if predicate.contains_temporal() {
+            if predicate.contains_temporal().unwrap_or(false) {
                 temporal_predicates.push(predicate.clone());
                 false
             } else {
@@ -494,9 +498,9 @@ impl MapFilterProject {
         }
 
         // Form a new `Self` containing the temporal predicates to return.
-        Self::new(self.projection.len())
+        Ok(Self::new(self.projection.len())
             .filter(temporal_predicates)
-            .project(0..old_projection_len)
+            .project(0..old_projection_len))
     }
 
     /// Extracts common expressions from multiple `Self` into a result `Self`.
@@ -889,16 +893,16 @@ impl MapFilterProject {
     ///     expected_optimized,
     /// );
     /// ```
-    pub fn optimize(&mut self) {
+    pub fn optimize(&mut self) -> Result<(), RecursionLimitError> {
         // Optimization memoizes individual `ScalarExpr` expressions that
         // are sure to be evaluated, canonicalizes references to the first
         // occurrence of each, inlines expressions that have a reference
         // count of one, and then removes any expressions that are not
         // referenced.
-        self.memoize_expressions();
+        self.memoize_expressions()?;
         self.predicates.sort();
         self.predicates.dedup();
-        self.inline_expressions();
+        self.inline_expressions()?;
         self.remove_undemanded();
 
         // Re-build `self` from parts to restore evaluation order invariants.
@@ -907,6 +911,7 @@ impl MapFilterProject {
             .map(map)
             .filter(filter)
             .project(project);
+        Ok(())
     }
 
     /// Place each certainly evaluated expression in its own column.
@@ -1004,7 +1009,7 @@ impl MapFilterProject {
     ///     expected_optimized,
     /// );
     /// ```
-    pub fn memoize_expressions(&mut self) {
+    pub fn memoize_expressions(&mut self) -> Result<(), RecursionLimitError> {
         // Record the mapping from starting column references to new column
         // references.
         let mut remaps = HashMap::new();
@@ -1025,7 +1030,7 @@ impl MapFilterProject {
                     &mut self.expressions[expression],
                     &mut new_expressions,
                     self.input_arity,
-                );
+                )?;
                 remaps.insert(
                     self.input_arity + expression,
                     self.input_arity + new_expressions.len(),
@@ -1034,7 +1039,7 @@ impl MapFilterProject {
                 expression += 1;
             }
             predicate.permute_map(&remaps);
-            memoize_expr(predicate, &mut new_expressions, self.input_arity);
+            memoize_expr(predicate, &mut new_expressions, self.input_arity)?;
         }
         while expression < self.expressions.len() {
             self.expressions[expression].permute_map(&remaps);
@@ -1042,7 +1047,7 @@ impl MapFilterProject {
                 &mut self.expressions[expression],
                 &mut new_expressions,
                 self.input_arity,
-            );
+            )?;
             remaps.insert(
                 self.input_arity + expression,
                 self.input_arity + new_expressions.len(),
@@ -1055,6 +1060,7 @@ impl MapFilterProject {
         for proj in self.projection.iter_mut() {
             *proj = remaps[proj];
         }
+        Ok(())
     }
 
     /// This method inlines expressions with a single use.
@@ -1113,7 +1119,7 @@ impl MapFilterProject {
     ///     expected_optimized,
     /// );
     /// ```
-    pub fn inline_expressions(&mut self) {
+    pub fn inline_expressions(&mut self) -> Result<(), RecursionLimitError> {
         // Local copy of input_arity to avoid borrowing `self` in closures.
         let input_arity = self.input_arity;
         // Reference counts track the number of places that a reference occurs.
@@ -1138,7 +1144,7 @@ impl MapFilterProject {
         for expr in self.expressions.iter() {
             // An express may contain a temporal expression, or reference a column containing such.
             is_temporal.push(
-                expr.contains_temporal() || expr.support().into_iter().any(|col| is_temporal[col]),
+                expr.contains_temporal()? || expr.support().into_iter().any(|col| is_temporal[col]),
             );
         }
 
@@ -1169,6 +1175,7 @@ impl MapFilterProject {
                 }
             }
         }
+        Ok(())
     }
 
     /// Inlines those expressions that are indicated by should_inline.
@@ -1301,9 +1308,9 @@ pub fn memoize_expr(
     expr: &mut MirScalarExpr,
     memoized_parts: &mut Vec<MirScalarExpr>,
     input_arity: usize,
-) {
+) -> Result<(), RecursionLimitError> {
     #[allow(deprecated)]
-    expr.visit_mut_pre_post_nolimit(
+    expr.visit_mut_pre_post(
         &mut |e| {
             // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.
@@ -1614,10 +1621,10 @@ pub mod plan {
             let mut temporal = Vec::new();
 
             // Optimize, to ensure that temporal predicates are move in to `mfp.predicates`.
-            mfp.optimize();
+            mfp.optimize()?;
 
             mfp.predicates.retain(|(_position, predicate)| {
-                if predicate.contains_temporal() {
+                if predicate.contains_temporal().unwrap_or(false) {
                     temporal.push(predicate.clone());
                     false
                 } else {
@@ -1634,7 +1641,7 @@ pub mod plan {
                 } = predicate
                 {
                     // Attempt to put `LogicalTimestamp` in the first argument position.
-                    if !expr1.contains_temporal()
+                    if !expr1.contains_temporal()?
                         && *expr2
                             == MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
                     {
@@ -1655,7 +1662,7 @@ pub mod plan {
                     }
 
                     // Error if MLT is referenced in an unsupported position.
-                    if expr2.contains_temporal()
+                    if expr2.contains_temporal()?
                         || *expr1
                             != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
                     {

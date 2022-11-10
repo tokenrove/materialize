@@ -256,3 +256,9 @@ impl fmt::Display for RecursionLimitError {
 }
 
 impl Error for RecursionLimitError {}
+
+impl From<RecursionLimitError> for String {
+    fn from(err: RecursionLimitError) -> Self {
+        err.to_string()
+    }
+}
