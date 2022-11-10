@@ -1150,122 +1150,126 @@ fn plan_set_expr(
             left,
             right,
         } => {
-            // Plan the LHS and RHS.
-            let (left_expr, left_scope) = plan_set_expr(qcx, left)?;
-            let (right_expr, right_scope) = plan_set_expr(qcx, right)?;
+            qcx.checked_recur_mut(|qcx| {
+                // Plan the LHS and RHS.
+                let (left_expr, left_scope) = plan_set_expr(qcx, left)?;
+                let (right_expr, right_scope) = plan_set_expr(qcx, right)?;
 
-            // Validate that the LHS and RHS are the same width.
-            let left_type = qcx.relation_type(&left_expr);
-            let right_type = qcx.relation_type(&right_expr);
-            if left_type.arity() != right_type.arity() {
-                sql_bail!(
-                    "each {} query must have the same number of columns: {} vs {}",
-                    op,
-                    left_type.arity(),
-                    right_type.arity(),
+                // Validate that the LHS and RHS are the same width.
+                let left_type = qcx.relation_type(&left_expr);
+                let right_type = qcx.relation_type(&right_expr);
+                if left_type.arity() != right_type.arity() {
+                    sql_bail!(
+                        "each {} query must have the same number of columns: {} vs {}",
+                        op,
+                        left_type.arity(),
+                        right_type.arity(),
+                    );
+                }
+
+                // Match the types of the corresponding columns on the LHS and RHS
+                // using the normal type coercion rules. This is equivalent to
+                // `coerce_homogeneous_exprs`, but implemented in terms of
+                // `HirRelationExpr` rather than `HirScalarExpr`.
+                let left_ecx = &ExprContext {
+                    qcx,
+                    name: &op.to_string(),
+                    scope: &left_scope,
+                    relation_type: &left_type,
+                    allow_aggregates: false,
+                    allow_subqueries: false,
+                    allow_windows: false,
+                };
+                let right_ecx = &ExprContext {
+                    qcx,
+                    name: &op.to_string(),
+                    scope: &right_scope,
+                    relation_type: &right_type,
+                    allow_aggregates: false,
+                    allow_subqueries: false,
+                    allow_windows: false,
+                };
+                let mut left_casts = vec![];
+                let mut right_casts = vec![];
+                for (i, (left_type, right_type)) in left_type
+                    .column_types
+                    .iter()
+                    .zip(right_type.column_types.iter())
+                    .enumerate()
+                {
+                    let types = &[
+                        Some(left_type.scalar_type.clone()),
+                        Some(right_type.scalar_type.clone()),
+                    ];
+                    let target = typeconv::guess_best_common_type(
+                        &left_ecx.with_name(&op.to_string()),
+                        types,
+                    )?;
+                    match typeconv::plan_cast(
+                        left_ecx,
+                        CastContext::Implicit,
+                        HirScalarExpr::column(i),
+                        &target,
+                    ) {
+                        Ok(expr) => left_casts.push(expr),
+                        Err(_) => sql_bail!(
+                            "{} types {} and {} cannot be matched",
+                            op,
+                            qcx.humanize_scalar_type(&left_type.scalar_type),
+                            qcx.humanize_scalar_type(&target),
+                        ),
+                    }
+                    match typeconv::plan_cast(
+                        right_ecx,
+                        CastContext::Implicit,
+                        HirScalarExpr::column(i),
+                        &target,
+                    ) {
+                        Ok(expr) => right_casts.push(expr),
+                        Err(_) => sql_bail!(
+                            "{} types {} and {} cannot be matched",
+                            op,
+                            qcx.humanize_scalar_type(&target),
+                            qcx.humanize_scalar_type(&right_type.scalar_type),
+                        ),
+                    }
+                }
+                let project_key: Vec<_> = (left_type.arity()..left_type.arity() * 2).collect();
+                let lhs = left_expr.map(left_casts).project(project_key.clone());
+                let rhs = right_expr.map(right_casts).project(project_key);
+
+                let relation_expr = match op {
+                    SetOperator::Union => {
+                        if *all {
+                            lhs.union(rhs)
+                        } else {
+                            lhs.union(rhs).distinct()
+                        }
+                    }
+                    SetOperator::Except => Hir::except(all, lhs, rhs),
+                    SetOperator::Intersect => {
+                        // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
+                        // Though we believe that render() does The Right Thing (TM)
+                        // Also note that we do *not* need another threshold() at the end of the method chain
+                        // because the right-hand side of the outer union only produces existing records,
+                        // i.e., the record counts for differential data flow definitely remain non-negative.
+                        let left_clone = lhs.clone();
+                        if *all {
+                            lhs.union(left_clone.union(rhs.negate()).threshold().negate())
+                        } else {
+                            lhs.union(left_clone.union(rhs.negate()).threshold().negate())
+                                .distinct()
+                        }
+                    }
+                };
+                let scope = Scope::from_source(
+                    None,
+                    // Column names are taken from the left, as in Postgres.
+                    left_scope.column_names(),
                 );
-            }
 
-            // Match the types of the corresponding columns on the LHS and RHS
-            // using the normal type coercion rules. This is equivalent to
-            // `coerce_homogeneous_exprs`, but implemented in terms of
-            // `HirRelationExpr` rather than `HirScalarExpr`.
-            let left_ecx = &ExprContext {
-                qcx,
-                name: &op.to_string(),
-                scope: &left_scope,
-                relation_type: &left_type,
-                allow_aggregates: false,
-                allow_subqueries: false,
-                allow_windows: false,
-            };
-            let right_ecx = &ExprContext {
-                qcx,
-                name: &op.to_string(),
-                scope: &right_scope,
-                relation_type: &right_type,
-                allow_aggregates: false,
-                allow_subqueries: false,
-                allow_windows: false,
-            };
-            let mut left_casts = vec![];
-            let mut right_casts = vec![];
-            for (i, (left_type, right_type)) in left_type
-                .column_types
-                .iter()
-                .zip(right_type.column_types.iter())
-                .enumerate()
-            {
-                let types = &[
-                    Some(left_type.scalar_type.clone()),
-                    Some(right_type.scalar_type.clone()),
-                ];
-                let target =
-                    typeconv::guess_best_common_type(&left_ecx.with_name(&op.to_string()), types)?;
-                match typeconv::plan_cast(
-                    left_ecx,
-                    CastContext::Implicit,
-                    HirScalarExpr::column(i),
-                    &target,
-                ) {
-                    Ok(expr) => left_casts.push(expr),
-                    Err(_) => sql_bail!(
-                        "{} types {} and {} cannot be matched",
-                        op,
-                        qcx.humanize_scalar_type(&left_type.scalar_type),
-                        qcx.humanize_scalar_type(&target),
-                    ),
-                }
-                match typeconv::plan_cast(
-                    right_ecx,
-                    CastContext::Implicit,
-                    HirScalarExpr::column(i),
-                    &target,
-                ) {
-                    Ok(expr) => right_casts.push(expr),
-                    Err(_) => sql_bail!(
-                        "{} types {} and {} cannot be matched",
-                        op,
-                        qcx.humanize_scalar_type(&target),
-                        qcx.humanize_scalar_type(&right_type.scalar_type),
-                    ),
-                }
-            }
-            let project_key: Vec<_> = (left_type.arity()..left_type.arity() * 2).collect();
-            let lhs = left_expr.map(left_casts).project(project_key.clone());
-            let rhs = right_expr.map(right_casts).project(project_key);
-
-            let relation_expr = match op {
-                SetOperator::Union => {
-                    if *all {
-                        lhs.union(rhs)
-                    } else {
-                        lhs.union(rhs).distinct()
-                    }
-                }
-                SetOperator::Except => Hir::except(all, lhs, rhs),
-                SetOperator::Intersect => {
-                    // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
-                    // Though we believe that render() does The Right Thing (TM)
-                    // Also note that we do *not* need another threshold() at the end of the method chain
-                    // because the right-hand side of the outer union only produces existing records,
-                    // i.e., the record counts for differential data flow definitely remain non-negative.
-                    let left_clone = lhs.clone();
-                    if *all {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
-                    } else {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
-                            .distinct()
-                    }
-                }
-            };
-            let scope = Scope::from_source(
-                None,
-                // Column names are taken from the left, as in Postgres.
-                left_scope.column_names(),
-            );
-
-            Ok((relation_expr, scope))
+                Ok((relation_expr, scope))
+            })
         }
         SetExpr::Values(Values(values)) => plan_values(qcx, values),
         SetExpr::Query(query) => {
