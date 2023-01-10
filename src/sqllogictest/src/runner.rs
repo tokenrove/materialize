@@ -713,9 +713,10 @@ impl<'a> Runner<'a> {
             .batch_execute("CREATE DATABASE materialize")
             .await?;
 
-        // Ensure default cluster exists with one replica of size '1'. We don't
-        // destroy the existing default cluster replica if it exists, as turning
-        // on a cluster replica is exceptionally slow.
+        // Ensure default cluster exists with one replica of size
+        // '4'. We don't destroy the existing default cluster replica
+        // if it exists and is the right size, as turning on a cluster
+        // replica is exceptionally slow.
         let mut needs_default_cluster = true;
         for row in inner
             .client
@@ -749,11 +750,11 @@ impl<'a> Runner<'a> {
             .await?
         {
             match (row.get("name"), row.get("size")) {
-                ("r1", "1") => needs_default_replica = false,
+                ("r1", "4") => needs_default_replica = false,
                 (name, _) => {
                     inner
                         .client
-                        .batch_execute(&format!("DROP CLUSTER REPLICA {name}"))
+                        .batch_execute(&format!("DROP CLUSTER REPLICA default.{name}"))
                         .await?
                 }
             }
@@ -761,7 +762,7 @@ impl<'a> Runner<'a> {
         if needs_default_replica {
             inner
                 .client
-                .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '1'")
+                .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '4'")
                 .await?;
         }
 
