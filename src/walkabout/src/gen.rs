@@ -54,6 +54,7 @@ pub fn gen_fold_root(ir: &Ir) -> String {
     let trait_generics_and_bounds = trait_generics_and_bounds(&generics);
 
     let mut buf = CodegenBuf::new();
+    buf.writeln("use mz_ore::stack::maybe_grow;");
 
     buf.write_block(
         format!("pub trait Fold<{trait_generics_and_bounds}>"),
@@ -119,52 +120,57 @@ pub fn gen_fold_root(ir: &Ir) -> String {
         ));
         buf.writeln("where");
         buf.writeln(format!("    F: Fold<{trait_generics}> + ?Sized,"));
-        buf.write_block("", |buf| match item {
-            Item::Struct(s) => {
-                buf.write_block(name, |buf| {
-                    for (i, f) in s.fields.iter().enumerate() {
-                        let field_name = match &f.name {
-                            Some(name) => name.clone(),
-                            None => i.to_string(),
-                        };
-                        let binding = format!("node.{field_name}");
-                        buf.start_line();
-                        buf.write(format!("{field_name}: "));
-                        gen_fold_element(buf, &binding, &f.ty);
-                        buf.write(",");
-                        buf.end_line();
-                    }
-                });
-            }
-            Item::Enum(e) => {
-                buf.write_block("match node", |buf| {
-                    for v in &e.variants {
-                        let vname = &v.name;
-                        buf.write_block(format!("{name}::{vname}"), |buf| {
-                            for (i, f) in v.fields.iter().enumerate() {
-                                let name = f.name.clone().unwrap_or_else(|| i.to_string());
-                                buf.writeln(format!("{name}: binding{i},"));
-                            }
-                            buf.restart_block("=>");
+        buf.write_block("", |buf| {
+            buf.write_block("maybe_grow(|| ", |buf| match item {
+                Item::Struct(s) => {
+                    buf.write_block(name, |buf| {
+                        for (i, f) in s.fields.iter().enumerate() {
+                            let field_name = match &f.name {
+                                Some(name) => name.clone(),
+                                None => i.to_string(),
+                            };
+                            let binding = format!("node.{field_name}");
+                            buf.start_line();
+                            buf.write(format!("{field_name}: "));
+                            gen_fold_element(buf, &binding, &f.ty);
+                            buf.write(",");
+                            buf.end_line();
+                        }
+                    });
+                }
+                Item::Enum(e) => {
+                    buf.write_block("match node", |buf| {
+                        for v in &e.variants {
+                            let vname = &v.name;
                             buf.write_block(format!("{name}::{vname}"), |buf| {
                                 for (i, f) in v.fields.iter().enumerate() {
-                                    let field_name = match &f.name {
-                                        Some(name) => name.clone(),
-                                        None => i.to_string(),
-                                    };
-                                    let binding = format!("binding{i}");
-                                    buf.start_line();
-                                    buf.write(format!("{field_name}: "));
-                                    gen_fold_element(buf, &binding, &f.ty);
-                                    buf.write(",");
-                                    buf.end_line();
+                                    let name = f.name.clone().unwrap_or_else(|| i.to_string());
+                                    buf.writeln(format!("{name}: binding{i},"));
                                 }
+                                buf.restart_block("=>");
+                                buf.write_block(format!("{name}::{vname}"), |buf| {
+                                    for (i, f) in v.fields.iter().enumerate() {
+                                        let field_name = match &f.name {
+                                            Some(name) => name.clone(),
+                                            None => i.to_string(),
+                                        };
+                                        let binding = format!("binding{i}");
+                                        buf.start_line();
+                                        buf.write(format!("{field_name}: "));
+                                        gen_fold_element(buf, &binding, &f.ty);
+                                        buf.write(",");
+                                        buf.end_line();
+                                    }
+                                });
                             });
-                        });
-                    }
-                });
-            }
-            Item::Abstract => (),
+                        }
+                    });
+                }
+                Item::Abstract => (),
+            });
+            buf.start_line();
+            buf.write(")");
+            buf.end_line();
         });
     }
 
