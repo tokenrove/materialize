@@ -20,6 +20,8 @@
 
 use std::fmt;
 
+use mz_ore::stack::maybe_grow;
+
 pub struct DisplaySeparated<'a, T>
 where
     T: AstDisplay,
@@ -89,7 +91,7 @@ where
     W: fmt::Write,
 {
     pub fn write_node<T: AstDisplay>(&mut self, s: &T) {
-        s.fmt(self);
+        maybe_grow(|| s.fmt(self));
     }
 
     // TODO(justin): make this only accept a &str so that we don't accidentally pass an AstDisplay
