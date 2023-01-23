@@ -757,7 +757,7 @@ impl<'a> Runner<'a> {
 impl RunnerInner {
     pub async fn start(config: &RunConfig<'_>) -> Result<RunnerInner, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let environment_id = EnvironmentId::for_tests();
+        let environment_id = config.environment_id.clone();
         let (consensus_uri, adapter_stash_url, storage_stash_url) = {
             let postgres_url = &config.postgres_url;
             info!(%postgres_url, "starting server");
@@ -1327,6 +1327,7 @@ pub struct RunConfig<'a> {
     pub fail_fast: bool,
     pub auto_index_tables: bool,
     pub persisted_introspection: bool,
+    pub environment_id: EnvironmentId,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

@@ -114,9 +114,18 @@ def main() -> int:
         command = [str(path)]
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
+
+        _handle_lingering_services(kill=args.reset)
+        mzdata = ROOT / "mzdata"
+        mzdata.mkdir(exist_ok=True)
+        environment_file = mzdata / "environment-id"
+        try:
+            environment_id = environment_file.read_text().rstrip()
+        except FileNotFoundError:
+            environment_id = f"local-az1-{uuid.uuid4()}-0"
+            environment_file.write_text(environment_id)
+
         if args.program == "environmentd":
-            _handle_lingering_services(kill=args.reset)
-            mzdata = ROOT / "mzdata"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             for schema in ["consensus", "adapter", "storage"]:
@@ -139,14 +148,6 @@ def main() -> int:
                     else:
                         path.unlink()
 
-            mzdata.mkdir(exist_ok=True)
-            environment_file = mzdata / "environment-id"
-            try:
-                environment_id = environment_file.read_text().rstrip()
-            except FileNotFoundError:
-                environment_id = f"local-az1-{uuid.uuid4()}-0"
-                environment_file.write_text(environment_id)
-
             command += [
                 # Setting the listen addresses below to 0.0.0.0 is required
                 # to allow Prometheus running in Docker (misc/prometheus)
@@ -166,7 +167,9 @@ def main() -> int:
         elif args.program == "sqllogictest":
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
-            command += [f"--postgres-url={args.postgres}", *args.args]
+            command += [f"--postgres-url={args.postgres}",
+                        f"--environment-id={environment_id}",
+                        *args.args]
     elif args.program == "test":
         build_retcode = _build(args)
         if args.build_only:

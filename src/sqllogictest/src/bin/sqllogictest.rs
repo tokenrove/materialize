@@ -86,6 +86,7 @@ use time::Instant;
 use walkdir::WalkDir;
 
 use mz_ore::cli::{self, CliConfig};
+use mz_sql::catalog::EnvironmentId;
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 
@@ -127,6 +128,13 @@ struct Args {
     /// Run Materialize with persisted introspection sources enabled.
     #[clap(long)]
     persisted_introspection: bool,
+    /// Environment ID used by the orchestrator to enable clusterd re-use.
+    #[clap(
+        long,
+        env = "ENVIRONMENT_ID",
+        value_name = "<CLOUD>-<REGION>-<ORG-ID>-<ORDINAL>"
+    )]
+    environment_id: EnvironmentId,
 }
 
 #[tokio::main]
@@ -145,6 +153,7 @@ async fn main() {
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
         persisted_introspection: args.persisted_introspection,
+        environment_id: args.environment_id.clone(),
     };
 
     if args.rewrite_results {
