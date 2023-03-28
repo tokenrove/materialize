@@ -186,15 +186,14 @@ class Composition:
                 config.pop("allow_host_ports")
 
             coverage_volume = "./coverage:/coverage"
-            if self.repo.rd.coverage and coverage_volume not in config.get(
-                "volumes", []
-            ):
+            if self.repo.rd.coverage:
                 # Emit coverage information to a file in a directory that is
                 # bind-mounted to the "coverage" directory on the host. We
                 # inject the configuration to all services for simplicity, but
                 # this only have an effect if the service runs instrumented Rust
                 # binaries.
-                config.setdefault("volumes", []).append(coverage_volume)
+                if coverage_volume not in config.get("volumes", []):
+                    config.setdefault("volumes", []).append(coverage_volume)
                 config.setdefault("environment", []).append(
                     f"LLVM_PROFILE_FILE=/coverage/{name}-%p-%9m%c.profraw"
                 )
