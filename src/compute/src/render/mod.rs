@@ -101,6 +101,7 @@
 //! if/when the errors are retracted.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -108,8 +109,9 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, ExchangeData};
 use timely::communication::Allocate;
+use timely::container::columnation::Columnation;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -917,5 +919,57 @@ impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> 
     }
     fn step_back(&self) -> Self {
         Product::new(self.outer.saturating_sub(1), self.inner.clone())
+    }
+}
+
+/// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
+/// specialized for use in compute.  The contract is that the error constructor for non-validating
+/// implementors will never be called.
+trait MaybeValidatingRow<T, E>: ExchangeData + Columnation + Hash {
+    fn validating() -> bool;
+    fn ok(t: T) -> Self;
+    fn error(e: E) -> Self;
+}
+
+impl<E> MaybeValidatingRow<Row, E> for Row {
+    fn validating() -> bool {
+        false
+    }
+    fn ok(t: Row) -> Self {
+        t
+    }
+    fn error(_: E) -> Self {
+        unreachable!()
+    }
+}
+
+impl<E, R> MaybeValidatingRow<Vec<R>, E> for Vec<R>
+where
+    R: ExchangeData + Columnation + Hash,
+{
+    fn validating() -> bool {
+        false
+    }
+    fn ok(t: Vec<R>) -> Self {
+        t
+    }
+    fn error(_: E) -> Self {
+        unreachable!()
+    }
+}
+
+impl<T, E> MaybeValidatingRow<T, E> for Result<T, E>
+where
+    T: ExchangeData + Columnation + Hash,
+    E: ExchangeData + Columnation + Hash,
+{
+    fn validating() -> bool {
+        true
+    }
+    fn ok(row: T) -> Self {
+        Ok(row)
+    }
+    fn error(row: E) -> Self {
+        Err(row)
     }
 }
