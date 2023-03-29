@@ -41,3 +41,7 @@ contains:Negative multiplicities in TopK
 # regression scenario per #17908
 ! SELECT DISTINCT data FROM data;
 contains:Non-positive multiplicity in DistinctBy
+
+# regression scenario per #18211
+! SELECT list_agg(DISTINCT data) FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable DISTINCT
