@@ -610,11 +610,26 @@ where
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
+        let debug_name = debug_name.to_string();
         partial = partial
             .arrange_named::<RowSpine<(Row, Row), _, _, _>>("Arranged ReduceInaccumulable")
-            .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", move |_, _, t| {
-                t.push(((), 1))
-            })
+            .reduce_abelian::<_, RowSpine<_, _, _, _>>(
+                "ReduceInaccumulable",
+                move |_, source, t| {
+                    for (value, count) in source.iter() {
+                        if count.is_positive() {
+                            continue;
+                        }
+
+                        // XXX: This reports user data, which we perhaps should not do!
+                        let message = "Non-positive accumulation in ReduceInaccumulable";
+                        warn!(?value, ?count, debug_name, "[customer-data] {message}");
+                        soft_assert_or_log!(false, "{message}");
+                        return;
+                    }
+                    t.push(((), 1))
+                },
+            )
             .as_collection(|k, _| k.clone())
     }
 
