@@ -785,38 +785,47 @@ where
         // Build a series of stages for the reduction
         // Arrange the final result into (key, Row)
         let debug_name = debug_name.to_string();
-        partial
-            .arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arrange ReduceMinsMaxes")
+        let arranged =
+            partial.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arrange ReduceMinsMaxes");
+        if validating {
+            let errs = arranged
+                .reduce_abelian::<_, ErrValSpine<_, _, _>>(
+                    "ReduceMinsMaxes Error Check",
+                    move |_key, source, target| {
+                        // Negative counts would be surprising, but until we are 100% certain we wont
+                        // see them, we should report when we do. We may want to bake even more info
+                        // in here in the future.
+                        for (val, count) in source.iter() {
+                            if count.is_positive() {
+                                continue;
+                            }
+
+                            let message = "Non-positive accumulation in ReduceMinsMaxes";
+                            warn!(?val, ?count, debug_name, "[customer-data] {message}");
+                            error!("{message}");
+                            target.push((
+                                DataflowError::from(EvalError::Internal(message.to_string())),
+                                1,
+                            ));
+                            return;
+                        }
+                    },
+                )
+                .as_collection(|_, v| v.clone());
+            err_output = Some(errs.leave_region());
+        }
+        arranged
             .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
                 let mut row_buf = Row::default();
-                move |_key, source, target| {
-                    // Negative counts would be surprising, but until we are 100% certain we wont
-                    // see them, we should report when we do. We may want to bake even more info
-                    // in here in the future.
-                    if validating && source.iter().any(|(_val, cnt)| cnt < &0) {
-                        // XXX: This reports user data, which we perhaps should not do!
-                        for (val, cnt) in source.iter() {
-                            if cnt < &0 {
-                                warn!(
-                                    "[customer-data] Negative accumulation in ReduceMinsMaxes: \
-                                    {val:?} with count {cnt:?} in dataflow {debug_name}"
-                                );
-                                soft_assert_or_log!(
-                                    false,
-                                    "Negative accumulation in ReduceMinsMaxes"
-                                );
-                            }
-                        }
-                    } else {
-                        let mut row_packer = row_buf.packer();
-                        for (aggr_index, func) in aggr_funcs.iter().enumerate() {
-                            let iter = source
-                                .iter()
-                                .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                            row_packer.push(func.eval(iter, &RowArena::new()));
-                        }
-                        target.push((row_buf.clone(), 1));
+                move |_key, source: &[(&Vec<Row>, Diff)], target: &mut Vec<(Row, Diff)>| {
+                    let mut row_packer = row_buf.packer();
+                    for (aggr_index, func) in aggr_funcs.iter().enumerate() {
+                        let iter = source
+                            .iter()
+                            .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                        row_packer.push(func.eval(iter, &RowArena::new()));
                     }
+                    target.push((row_buf.clone(), 1));
                 }
             })
             .leave_region()
@@ -852,37 +861,74 @@ where
     let arranged_input =
         input.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input");
 
-    let negated_output = arranged_input
-        .reduce_abelian::<_, RowSpine<_, _, _, _>>(
-            "Reduced Fallibly MinsMaxesHierarchical",
-            move |key, source, target| {
-                if R::validating() {
+    #[inline]
+    fn inner<C: Fn(Vec<Row>) -> R, R>(
+        aggrs: &[AggregateFunc],
+        source: &[(&Vec<Row>, Diff)],
+        target: &mut Vec<(R, Diff)>,
+        logic: C,
+    ) {
+        let mut output = Vec::with_capacity(aggrs.len());
+        for (aggr_index, func) in aggrs.iter().enumerate() {
+            let iter = source
+                .iter()
+                .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+            output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
+        }
+        // We only want to arrange the parts of the input that are not part of the output.
+        // More specifically, we want to arrange it so that `input.concat(&output.negate())`
+        // gives us the intended value of this aggregate function. Also we assume that regardless
+        // of the multiplicity of the final result in the input, we only want to have one copy
+        // in the output.
+        target.push((logic(output), -1));
+        target.extend(
+            source
+                .iter()
+                .map(|(values, cnt)| (logic((*values).clone()), *cnt)),
+        );
+    }
+
+    let (negated_output, stage_errs) = if validating {
+        let (negated_output, errs) = arranged_input
+            .reduce_abelian::<_, RowSpine<_, Result<_, _>, _, _>>(
+                "Reduced Fallibly MinsMaxesHierarchical",
+                move |key, source, target| {
                     // Should negative accumulations reach us, we should loudly complain.
-                    for (value, count) in source.iter() {
+                    for (val, count) in source.iter() {
                         if count.is_positive() {
                             continue;
                         }
+
                         let message = "Non-positive accumulation in MinsMaxesHierarchical";
-                        warn!(
-                            ?key,
-                            ?value,
-                            ?count,
-                            debug_name,
-                            "[customer-data] {message}"
-                        );
+                        warn!(?key, ?val, ?count, debug_name, "[customer-data] {message}");
                         error!("{message}");
-                        // After complaining, output an error here so that we can eventually
-                        // report it in an error stream.
-                        target.push((R::error(key.clone()), -1));
+                        target.push((
+                            Err(format!(
+                                "Invalid data in source, saw non-positive accumulation for \
+                                 key {key:?} in hierarchical mins-maxes aggregate"
+                            )),
+                            1,
+                        ));
                         return;
                     }
-                }
-                let mut output = Vec::with_capacity(aggrs.len());
-                for (aggr_index, func) in aggrs.iter().enumerate() {
-                    let iter = source
-                        .iter()
-                        .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                    output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
+
+                    inner(&aggrs, source, target, Ok);
+                },
+            )
+            .as_collection(|k, v| (k.clone(), v.clone()))
+            .map_fallible(
+                "Checked Invalid Accumulations",
+                |(key, result)| match result {
+                    Err(message) => Err(EvalError::Internal(message).into()),
+                    Ok(values) => Ok((key, values)),
+                },
+            );
+        (negated_output, Some(errs))
+    } else {
+        let negated_output = arranged_input
+            .reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced MinsMaxesHierarchical", {
+                move |_key, source, target| {
+                    inner(&aggrs, source, target, std::convert::identity);
                 }
                 // We only want to arrange the parts of the input that are not part of the output.
                 // More specifically, we want to arrange it so that `input.concat(&output.negate())`

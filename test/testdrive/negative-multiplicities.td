@@ -45,3 +45,7 @@ contains:Non-positive multiplicity in DistinctBy
 # regression scenario per #18211
 ! SELECT list_agg(DISTINCT data) FROM data;
 contains:Non-positive accumulation in ReduceInaccumulable DISTINCT
+
+# regression scenario per #17509
+! SELECT MAX(data) FROM data;
+contains:Non-positive accumulation in ReduceMinsMaxes
